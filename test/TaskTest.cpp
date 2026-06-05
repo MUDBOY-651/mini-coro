@@ -1,11 +1,60 @@
 #include "Task.h"
 
 #include <coroutine>
+#include <exception>
 #include <utility>
 
 #include <gtest/gtest.h>
 
 namespace {
+
+class TestContinuation {
+public:
+    struct promise_type {
+        TestContinuation get_return_object() {
+            return TestContinuation{
+                std::coroutine_handle<promise_type>::from_promise(*this)
+            };
+        }
+
+        std::suspend_always initial_suspend() noexcept { return {}; }
+        std::suspend_always final_suspend() noexcept { return {}; }
+        void return_void() noexcept {}
+        void unhandled_exception() { std::terminate(); }
+    };
+
+    explicit TestContinuation(std::coroutine_handle<promise_type> handle): handle_(handle) {}
+    TestContinuation(const TestContinuation&) = delete;
+    TestContinuation& operator=(const TestContinuation&) = delete;
+
+    TestContinuation(TestContinuation&& other) noexcept: handle_(other.handle_) {
+        other.handle_ = nullptr;
+    }
+
+    ~TestContinuation() {
+        if (handle_) {
+            handle_.destroy();
+        }
+    }
+
+    std::coroutine_handle<> handle() const noexcept {
+        return handle_;
+    }
+
+    void resume() {
+        if (handle_ && !handle_.done()) {
+            handle_.resume();
+        }
+    }
+
+private:
+    std::coroutine_handle<promise_type> handle_;
+};
+
+TestContinuation suspended_continuation(bool& resumed) {
+    co_await std::suspend_always{};
+    resumed = true;
+}
 
 mini_core::Task<int> make_value(int value) {
     co_return value;
@@ -23,6 +72,26 @@ mini_core::Task<void> step_void_task(int& step) {
     co_await std::suspend_always{};
     step = 2;
     co_return;
+}
+
+mini_core::Task<int> inner_value_task(int& run_count) {
+    ++run_count;
+    co_return 42;
+}
+
+mini_core::Task<int> outer_awaits_value_task(int& inner_run_count) {
+    int value = co_await inner_value_task(inner_run_count);
+    co_return value + 10;
+}
+
+mini_core::Task<void> inner_void_task(int& run_count) {
+    ++run_count;
+    co_return;
+}
+
+mini_core::Task<int> outer_awaits_void_task(int& inner_run_count) {
+    co_await inner_void_task(inner_run_count);
+    co_return inner_run_count + 10;
 }
 
 } // namespace
@@ -68,6 +137,81 @@ TEST(TaskTest, VoidTaskCanBeResumedUntilDone) {
     task.resume();
     EXPECT_EQ(step, 2);
     EXPECT_TRUE(task.done());
+}
+
+TEST(TaskTest, CoAwaitValueTaskRunsInnerCoroutineAndReturnsResult) {
+    int inner_run_count = 0;
+    auto task = outer_awaits_value_task(inner_run_count);
+
+    task.resume();
+
+    EXPECT_EQ(inner_run_count, 1);
+    ASSERT_TRUE(task.done());
+    EXPECT_EQ(task.get_result(), 52);
+}
+
+TEST(TaskTest, CoAwaitVoidTaskRunsInnerCoroutineAndResumesOuterCoroutine) {
+    int inner_run_count = 0;
+    auto task = outer_awaits_void_task(inner_run_count);
+
+    task.resume();
+
+    EXPECT_EQ(inner_run_count, 1);
+    ASSERT_TRUE(task.done());
+    EXPECT_EQ(task.get_result(), 11);
+}
+
+TEST(TaskTest, AwaiterReadyReflectsTaskCompletion) {
+    auto task = make_value(13);
+
+    EXPECT_FALSE(task.await_ready());
+
+    task.resume();
+
+    ASSERT_TRUE(task.await_ready());
+    EXPECT_EQ(task.await_resume(), 13);
+}
+
+TEST(TaskTest, AwaitSuspendReturnsInnerHandleAndInnerCompletionResumesContinuation) {
+    int inner_run_count = 0;
+    bool continuation_resumed = false;
+    auto task = inner_value_task(inner_run_count);
+    auto continuation = suspended_continuation(continuation_resumed);
+    continuation.resume();
+
+    auto next = task.await_suspend(continuation.handle());
+
+    EXPECT_TRUE(next);
+    EXPECT_EQ(inner_run_count, 0);
+    EXPECT_FALSE(continuation_resumed);
+
+    next.resume();
+
+    EXPECT_EQ(inner_run_count, 1);
+    EXPECT_TRUE(continuation_resumed);
+    ASSERT_TRUE(task.await_ready());
+    EXPECT_EQ(task.await_resume(), 42);
+}
+
+TEST(TaskTest, VoidAwaiterRunsInnerHandleAndResumesContinuation) {
+    int inner_run_count = 0;
+    bool continuation_resumed = false;
+    auto task = inner_void_task(inner_run_count);
+    auto continuation = suspended_continuation(continuation_resumed);
+    continuation.resume();
+
+    auto next = task.await_suspend(continuation.handle());
+
+    EXPECT_TRUE(next);
+    EXPECT_EQ(inner_run_count, 0);
+    EXPECT_FALSE(continuation_resumed);
+
+    next.resume();
+
+    EXPECT_EQ(inner_run_count, 1);
+    EXPECT_TRUE(continuation_resumed);
+    EXPECT_TRUE(task.await_ready());
+    EXPECT_NO_THROW(task.await_resume());
 }
 
 TEST(TaskTest, MoveConstructionTransfersCoroutineHandle) {

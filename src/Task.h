@@ -20,7 +20,19 @@ struct TaskPromise {
     std::suspend_always initial_suspend() { return {}; }
 
     // 3. 控制协程结束前是否挂起（通常必须挂起，让外部取结果）
-    std::suspend_always final_suspend() noexcept { return {}; }
+    auto final_suspend() noexcept {
+        struct FinalAwaiter {
+            bool await_ready() noexcept { return false; }
+            void await_resume() noexcept {}
+            std::coroutine_handle<> await_suspend(std::coroutine_handle<TaskPromise> h) noexcept {
+                if (h.promise().continuation_) {
+                    return h.promise().continuation_;
+                }
+                return std::noop_coroutine();
+            }
+        };
+        return FinalAwaiter{};
+    }
 
     // 4. 处理 co_return 的值
     void return_value(T val) {
@@ -31,6 +43,7 @@ struct TaskPromise {
     void unhandled_exception() { std::terminate(); }
 
     T val_;
+    std::coroutine_handle<> continuation_{};
 };
 
 // TaskPromise特化void
@@ -42,11 +55,27 @@ struct TaskPromise<T, std::enable_if_t<std::is_void_v<T>>> {
     }
     std::suspend_always initial_suspend() { return {}; }
 
-    std::suspend_always final_suspend() noexcept { return {}; }
+    auto final_suspend() noexcept {
+        struct FinalAwaiter {
+            bool await_ready() noexcept { return false; }
+            void await_resume() noexcept {}
+            std::coroutine_handle<> await_suspend(std::coroutine_handle<TaskPromise> h) noexcept {
+                if (h.promise().continuation_) {
+                    return h.promise().continuation_;
+                }
+                return std::noop_coroutine();
+            }
+        };
+        return FinalAwaiter{};
+    }
+
+
 
     void unhandled_exception() { std::terminate(); }
 
     void return_void() {}
+
+    std::coroutine_handle<> continuation_{};
 };
 
 
@@ -79,6 +108,29 @@ public:
         }
     }
 
+    /* Awaiter Begin */
+
+    // 协程是否已经完成？完成则不挂起，直接取结果
+    bool await_ready() const noexcept {
+        return !handle_ || handle_.done();
+    }
+
+    // 协程未完成，挂起当前协程，把当前协程的handle存起来
+    std::coroutine_handle<> await_suspend(std::coroutine_handle<> continuation) noexcept {
+        assert(handle_);
+        handle_.promise().continuation_ = continuation;
+        return handle_;
+    }
+
+    T await_resume() {
+        if constexpr (std::is_void_v<T>) {
+            return;
+        } else {
+            return std::move(handle_.promise().val_);
+        }
+    }
+    /* Awaiter End */
+
     bool done() const {
         return !handle_ || handle_.done();
     }
@@ -91,7 +143,11 @@ public:
 
     T get_result() {
         assert(handle_ && handle_.done());
-        return std::move(handle_.promise().val_);
+        if constexpr (std::is_void_v<T>) {
+            return;
+        } else {
+            return std::move(handle_.promise().val_);
+        }
     }
 
 private:
@@ -99,5 +155,4 @@ private:
 };
 
 }
-
 
