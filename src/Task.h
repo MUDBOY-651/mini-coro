@@ -5,6 +5,8 @@
 #include <type_traits>
 #include <utility>
 
+#include "Scheduler.h"
+
 namespace mini_core {
 
 template<typename T>
@@ -148,6 +150,10 @@ public:
         } else {
             return std::move(handle_.promise().val_);
         }
+    }
+
+    void start(Scheduler &scheduler) {
+        scheduler.schedule(handle_);
     }
 
 private:

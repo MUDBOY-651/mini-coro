@@ -1,0 +1,105 @@
+#include "Task.h"
+
+#include <vector>
+
+#include <gtest/gtest.h>
+
+namespace {
+
+mini_core::Task<void> set_flag_task(bool& flag) {
+    flag = true;
+    co_return;
+}
+
+mini_core::Task<void> increment_task(int& count) {
+    ++count;
+    co_return;
+}
+
+mini_core::Task<void> yielding_task(mini_core::Scheduler& scheduler, std::vector<int>& events) {
+    events.push_back(1);
+    co_await scheduler.yield();
+    events.push_back(3);
+    co_return;
+}
+
+mini_core::Task<void> simple_event_task(std::vector<int>& events) {
+    events.push_back(2);
+    co_return;
+}
+
+mini_core::Task<void> multi_yield_task(mini_core::Scheduler& scheduler, std::vector<int>& events) {
+    events.push_back(1);
+    co_await scheduler.yield();
+    events.push_back(2);
+    co_await scheduler.yield();
+    events.push_back(3);
+    co_return;
+}
+
+} // namespace
+
+TEST(SchedulerTest, RunOnEmptyQueueDoesNothing) {
+    mini_core::Scheduler scheduler;
+
+    EXPECT_NO_THROW(scheduler.run());
+}
+
+TEST(SchedulerTest, StartSchedulesTaskAndRunExecutesIt) {
+    mini_core::Scheduler scheduler;
+    bool flag = false;
+    auto task = set_flag_task(flag);
+
+    task.start(scheduler);
+
+    EXPECT_FALSE(flag);
+    EXPECT_FALSE(task.done());
+
+    scheduler.run();
+
+    EXPECT_TRUE(flag);
+    EXPECT_TRUE(task.done());
+}
+
+TEST(SchedulerTest, YieldRequeuesTaskBehindAlreadyScheduledWork) {
+    mini_core::Scheduler scheduler;
+    std::vector<int> events;
+    auto first = yielding_task(scheduler, events);
+    auto second = simple_event_task(events);
+
+    first.start(scheduler);
+    second.start(scheduler);
+    scheduler.run();
+
+    EXPECT_EQ(events, (std::vector<int>{1, 2, 3}));
+    EXPECT_TRUE(first.done());
+    EXPECT_TRUE(second.done());
+}
+
+TEST(SchedulerTest, RunContinuesTaskAcrossMultipleYields) {
+    mini_core::Scheduler scheduler;
+    std::vector<int> events;
+    auto task = multi_yield_task(scheduler, events);
+
+    task.start(scheduler);
+    scheduler.run();
+
+    EXPECT_EQ(events, (std::vector<int>{1, 2, 3}));
+    EXPECT_TRUE(task.done());
+}
+
+TEST(SchedulerTest, RunSkipsAlreadyCompletedTaskHandle) {
+    mini_core::Scheduler scheduler;
+    int count = 0;
+    auto task = increment_task(count);
+
+    task.start(scheduler);
+    scheduler.run();
+    ASSERT_TRUE(task.done());
+    EXPECT_EQ(count, 1);
+
+    task.start(scheduler);
+    scheduler.run();
+
+    EXPECT_EQ(count, 1);
+}

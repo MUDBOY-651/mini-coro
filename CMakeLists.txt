@@ -17,6 +17,7 @@ if(BUILD_TESTING)
     find_package(GTest REQUIRED)
 
     add_executable(mini_coro_tests
+        test/SchedulerTest.cpp
         test/TaskTest.cpp
     )
     target_link_libraries(mini_coro_tests PRIVATE
