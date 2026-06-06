@@ -18,6 +18,7 @@ if(BUILD_TESTING)
 
     add_executable(mini_coro_tests
         test/SchedulerTest.cpp
+        test/SyncWaitTest.cpp
         test/TaskTest.cpp
     )
     target_link_libraries(mini_coro_tests PRIVATE
