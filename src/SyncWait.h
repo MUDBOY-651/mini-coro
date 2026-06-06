@@ -1,6 +1,7 @@
 #pragma once
 #include <cassert>
 #include <type_traits>
+#include <utility>
 #include "Scheduler.h"
 #include "Task.h"
 
@@ -24,6 +25,11 @@ T sync_wait(Scheduler &scheduler, Task<T> task) {
     return task.get_result();
 }
 
+template <typename Fn>
+auto sync_wait(Fn&& mask_task) {
+    Scheduler scheduler;
+    auto task = std::forward<Fn>(mask_task)(scheduler);
+    return sync_wait(scheduler, std::move(task));
 }
 
-
+}

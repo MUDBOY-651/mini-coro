@@ -90,3 +90,68 @@ TEST(SyncWaitTest, TemporaryImplementationDrainsExistingSchedulerWork) {
     EXPECT_EQ(events, (std::vector<int>{1}));
     EXPECT_TRUE(unrelated.done());
 }
+
+TEST(SyncWaitTest, InternalSchedulerReturnsValueTaskResult) {
+    const auto result = mini_core::sync_wait([](mini_core::Scheduler&) -> mini_core::Task<int> {
+        co_return 21;
+    });
+
+    EXPECT_EQ(result, 21);
+}
+
+TEST(SyncWaitTest, InternalSchedulerWaitsForVoidTaskCompletion) {
+    bool flag = false;
+
+    mini_core::sync_wait([&flag](mini_core::Scheduler&) -> mini_core::Task<void> {
+        flag = true;
+        co_return;
+    });
+
+    EXPECT_TRUE(flag);
+}
+
+TEST(SyncWaitTest, InternalSchedulerRunsTaskAcrossYieldPoints) {
+    std::vector<int> events;
+
+    const auto result = mini_core::sync_wait([&events](mini_core::Scheduler& scheduler) -> mini_core::Task<int> {
+        events.push_back(1);
+        co_await scheduler.yield();
+        events.push_back(2);
+        co_return 34;
+    });
+
+    EXPECT_EQ(result, 34);
+    EXPECT_EQ(events, (std::vector<int>{1, 2}));
+}
+
+TEST(SyncWaitTest, InternalSchedulerRunsTaskAcrossSleepFor) {
+    bool resumed = false;
+
+    const auto result = mini_core::sync_wait([&resumed](mini_core::Scheduler& scheduler) -> mini_core::Task<int> {
+        co_await scheduler.sleep_for(1ms);
+        resumed = true;
+        co_return 55;
+    });
+
+    EXPECT_EQ(result, 55);
+    EXPECT_TRUE(resumed);
+}
+
+TEST(SyncWaitTest, InternalSchedulerDoesNotDrainExternalSchedulerWork) {
+    mini_core::Scheduler external_scheduler;
+    std::vector<int> events;
+    auto unrelated = push_event_task(events, 1);
+    unrelated.start(external_scheduler);
+
+    EXPECT_EQ(mini_core::sync_wait([](mini_core::Scheduler&) -> mini_core::Task<int> {
+        co_return 8;
+    }), 8);
+
+    EXPECT_TRUE(events.empty());
+    EXPECT_FALSE(unrelated.done());
+
+    external_scheduler.run();
+
+    EXPECT_EQ(events, (std::vector<int>{1}));
+    EXPECT_TRUE(unrelated.done());
+}
