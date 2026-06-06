@@ -153,7 +153,9 @@ public:
     }
 
     void start(Scheduler &scheduler) {
-        scheduler.schedule(handle_);
+        if (handle_) {
+            scheduler.schedule(handle_);
+        }
     }
 
 private:
