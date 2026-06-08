@@ -2,6 +2,8 @@
 
 #include <coroutine>
 #include <exception>
+#include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 #include <gtest/gtest.h>
@@ -56,8 +58,25 @@ TestContinuation suspended_continuation(bool& resumed) {
     resumed = true;
 }
 
+struct NonDefaultResult {
+    explicit NonDefaultResult(int value): value(value) {}
+    NonDefaultResult() = delete;
+    NonDefaultResult(const NonDefaultResult&) = delete;
+    NonDefaultResult& operator=(const NonDefaultResult&) = delete;
+    NonDefaultResult(NonDefaultResult&&) noexcept = default;
+    NonDefaultResult& operator=(NonDefaultResult&&) noexcept = default;
+
+    int value;
+};
+
+static_assert(!std::is_default_constructible_v<NonDefaultResult>);
+
 mini_core::Task<int> make_value(int value) {
     co_return value;
+}
+
+mini_core::Task<NonDefaultResult> make_non_default_result(int value) {
+    co_return NonDefaultResult{value};
 }
 
 mini_core::Task<int> step_value_task(int& step) {
@@ -94,6 +113,26 @@ mini_core::Task<int> outer_awaits_void_task(int& inner_run_count) {
     co_return inner_run_count + 10;
 }
 
+mini_core::Task<int> throwing_value_task() {
+    throw std::runtime_error("value failed");
+    co_return 1;
+}
+
+mini_core::Task<void> throwing_void_task() {
+    throw std::runtime_error("void failed");
+    co_return;
+}
+
+mini_core::Task<int> outer_awaits_throwing_value_task() {
+    co_await throwing_value_task();
+    co_return 1;
+}
+
+mini_core::Task<int> outer_awaits_throwing_void_task() {
+    co_await throwing_void_task();
+    co_return 1;
+}
+
 } // namespace
 
 TEST(TaskTest, ValueTaskStartsSuspendedAndReturnsValue) {
@@ -105,6 +144,16 @@ TEST(TaskTest, ValueTaskStartsSuspendedAndReturnsValue) {
 
     ASSERT_TRUE(task.done());
     EXPECT_EQ(task.get_result(), 7);
+}
+
+TEST(TaskTest, ValueTaskCanReturnNonDefaultConstructibleResult) {
+    auto task = make_non_default_result(17);
+
+    task.resume();
+
+    ASSERT_TRUE(task.done());
+    auto result = task.get_result();
+    EXPECT_EQ(result.value, 17);
 }
 
 TEST(TaskTest, ResumeAdvancesCoroutineUntilNextSuspendPoint) {
@@ -139,6 +188,24 @@ TEST(TaskTest, VoidTaskCanBeResumedUntilDone) {
     EXPECT_TRUE(task.done());
 }
 
+TEST(TaskTest, ValueTaskGetResultRethrowsStoredException) {
+    auto task = throwing_value_task();
+
+    task.resume();
+
+    ASSERT_TRUE(task.done());
+    EXPECT_THROW(task.get_result(), std::runtime_error);
+}
+
+TEST(TaskTest, VoidTaskGetResultRethrowsStoredException) {
+    auto task = throwing_void_task();
+
+    task.resume();
+
+    ASSERT_TRUE(task.done());
+    EXPECT_THROW(task.get_result(), std::runtime_error);
+}
+
 TEST(TaskTest, CoAwaitValueTaskRunsInnerCoroutineAndReturnsResult) {
     int inner_run_count = 0;
     auto task = outer_awaits_value_task(inner_run_count);
@@ -161,6 +228,24 @@ TEST(TaskTest, CoAwaitVoidTaskRunsInnerCoroutineAndResumesOuterCoroutine) {
     EXPECT_EQ(task.get_result(), 11);
 }
 
+TEST(TaskTest, CoAwaitValueTaskPropagatesExceptionToOuterTask) {
+    auto task = outer_awaits_throwing_value_task();
+
+    task.resume();
+
+    ASSERT_TRUE(task.done());
+    EXPECT_THROW(task.get_result(), std::runtime_error);
+}
+
+TEST(TaskTest, CoAwaitVoidTaskPropagatesExceptionToOuterTask) {
+    auto task = outer_awaits_throwing_void_task();
+
+    task.resume();
+
+    ASSERT_TRUE(task.done());
+    EXPECT_THROW(task.get_result(), std::runtime_error);
+}
+
 TEST(TaskTest, AwaiterReadyReflectsTaskCompletion) {
     auto task = make_value(13);
 
@@ -170,6 +255,24 @@ TEST(TaskTest, AwaiterReadyReflectsTaskCompletion) {
 
     ASSERT_TRUE(task.await_ready());
     EXPECT_EQ(task.await_resume(), 13);
+}
+
+TEST(TaskTest, ValueTaskAwaitResumeRethrowsStoredException) {
+    auto task = throwing_value_task();
+
+    task.resume();
+
+    ASSERT_TRUE(task.done());
+    EXPECT_THROW(task.await_resume(), std::runtime_error);
+}
+
+TEST(TaskTest, VoidTaskAwaitResumeRethrowsStoredException) {
+    auto task = throwing_void_task();
+
+    task.resume();
+
+    ASSERT_TRUE(task.done());
+    EXPECT_THROW(task.await_resume(), std::runtime_error);
 }
 
 TEST(TaskTest, AwaitSuspendReturnsInnerHandleAndInnerCompletionResumesContinuation) {

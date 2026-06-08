@@ -2,6 +2,7 @@
 #include <cassert>
 #include <coroutine>
 #include <exception>
+#include <optional>
 #include <type_traits>
 #include <utility>
 
@@ -37,15 +38,25 @@ struct TaskPromise {
     }
 
     // 4. 处理 co_return 的值
-    void return_value(T val) {
-        val_ = std::move(val);
+    template <typename U>
+    void return_value(U&& value) {
+        value_.emplace(std::forward<U>(value));
     }
 
     // 5. 处理未捕获异常
-    void unhandled_exception() { std::terminate(); }
+    void unhandled_exception() {
+        exception_ = std::current_exception();
+    }
 
-    T val_;
+    void rethrow_if_exception() {
+        if (exception_) {
+            std::rethrow_exception(exception_);
+        }
+    }
+
+    std::optional<T> value_;
     std::coroutine_handle<> continuation_{};
+    std::exception_ptr exception_;
 };
 
 // TaskPromise特化void
@@ -73,11 +84,20 @@ struct TaskPromise<T, std::enable_if_t<std::is_void_v<T>>> {
 
 
 
-    void unhandled_exception() { std::terminate(); }
+    void unhandled_exception() {
+        exception_ = std::current_exception();
+    }
+
+    void rethrow_if_exception() {
+        if (exception_) {
+            std::rethrow_exception(exception_);
+        }
+    }
 
     void return_void() {}
 
     std::coroutine_handle<> continuation_{};
+    std::exception_ptr exception_;
 };
 
 
@@ -125,11 +145,14 @@ public:
     }
 
     T await_resume() {
+        assert(handle_ && handle_.done());
+        auto& promise = handle_.promise();
+        promise.rethrow_if_exception();
         if constexpr (std::is_void_v<T>) {
             return;
-        } else {
-            return std::move(handle_.promise().val_);
         }
+        assert(promise.value_.has_value());
+        return std::move(*promise.value_);
     }
     /* Awaiter End */
 
@@ -145,10 +168,13 @@ public:
 
     T get_result() {
         assert(handle_ && handle_.done());
+        auto& promise = handle_.promise();
+        promise.rethrow_if_exception();
         if constexpr (std::is_void_v<T>) {
             return;
         } else {
-            return std::move(handle_.promise().val_);
+            assert(promise.value_.has_value());
+            return std::move(*promise.value_);
         }
     }
 
@@ -163,4 +189,3 @@ private:
 };
 
 }
-
