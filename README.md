@@ -19,7 +19,9 @@ ctest --test-dir build --output-on-failure
 ## Reading Path
 
 - [Task 基础模型](docs/01-task-basics.md)
-- [Awaiter 与 Scheduler 模型](docs/03-scheduler.md)
+- [Awaiter 与 Scheduler 总览](docs/03-scheduler.md)
+- [Awaiter 模型](docs/03a-awaiter-model.md)
+- [Scheduler 模型](docs/03b-scheduler-model.md)
 
 ## Current Scope
 

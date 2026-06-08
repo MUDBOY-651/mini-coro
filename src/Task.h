@@ -150,9 +150,10 @@ public:
         promise.rethrow_if_exception();
         if constexpr (std::is_void_v<T>) {
             return;
+        } else {
+            assert(promise.value_.has_value());
+            return std::move(*promise.value_);
         }
-        assert(promise.value_.has_value());
-        return std::move(*promise.value_);
     }
     /* Awaiter End */
 
